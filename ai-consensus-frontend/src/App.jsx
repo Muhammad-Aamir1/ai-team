@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { Moon, Sun, Send, Bot, Sparkles } from 'lucide-react';
+import { Moon, Sun, Send, Menu, SquarePen, Sparkles, Plus, SlidersHorizontal, Mic, Copy, Check } from 'lucide-react';
 import './App.css';
 
 function App() {
@@ -10,19 +10,38 @@ function App() {
   const [statusMessage, setStatusMessage] = useState('');
   const [finalOutput, setFinalOutput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(true);
+  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(true); // Smart scroll state
   
-  const outputEndRef = useRef(null);
+  const mainContentRef = useRef(null);
 
-  // Auto-scroll to bottom as text streams
+  // Smart Auto-Scroll logic
   useEffect(() => {
-    outputEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [finalOutput, statusMessage]);
+    if (autoScroll && mainContentRef.current) {
+      // Smoothly scroll the container to the bottom without hijacking the whole page
+      mainContentRef.current.scrollTop = mainContentRef.current.scrollHeight;
+    }
+  }, [finalOutput, statusMessage, autoScroll]);
 
-  // Handle Dark Mode toggle
+  // Detect if the user manually scrolls up
+  const handleScroll = () => {
+    if (!mainContentRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = mainContentRef.current;
+    // If user is within 100px of the bottom, keep auto-scrolling. Otherwise, pause it.
+    const isAtBottom = scrollHeight - scrollTop <= clientHeight + 100;
+    setAutoScroll(isAtBottom);
+  };
+
   useEffect(() => {
     document.body.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
   }, [isDarkMode]);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(finalOutput);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000); // Reset button after 2 seconds
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -31,6 +50,7 @@ function App() {
     setIsProcessing(true);
     setStatusMessage('Initiating AI Consensus Chain...');
     setFinalOutput('');
+    setAutoScroll(true); // Reset auto-scroll when a new prompt starts
 
     try {
       const response = await fetch('/api/solve-issue', {
@@ -64,9 +84,7 @@ function App() {
               setStatusMessage('Done!');
               setIsProcessing(false);
             }
-          } catch (err) {
-            // Ignore partial JSON chunks during rapid streaming
-          }
+          } catch (err) { }
         }
       }
     } catch (error) {
@@ -75,101 +93,150 @@ function App() {
     }
   };
 
+  const handleChipClick = (text) => {
+    setIssue(text);
+  };
+
   return (
-    <div className="app-container">
-      {/* Header */}
-      <header className="header">
-        <div className="logo">
-          <Sparkles className="icon-sparkle" size={28} />
-          <h1>Consensus AI</h1>
-        </div>
-        <button 
-          className="theme-toggle" 
-          onClick={() => setIsDarkMode(!isDarkMode)}
-          aria-label="Toggle dark mode"
-        >
-          {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
-        </button>
-      </header>
+    <div className="layout">
+      {/* Sidebar */}
+      <aside className="sidebar">
+        <button className="icon-btn"><Menu size={20} /></button>
+        <button className="icon-btn new-chat-btn"><SquarePen size={20} /></button>
+      </aside>
 
       {/* Main Content Area */}
-      <main className="main-content">
-        {!isProcessing && !finalOutput && (
-          <div className="empty-state">
-            <Bot size={48} className="empty-icon" />
-            <h2>How can I help you today?</h2>
-            <p>Describe your tech, code, or cloud architecture issue. I will pass it through 5 flagship AI models to verify and refine the perfect solution.</p>
+      <div className="main-wrapper">
+        <header className="header">
+          <div className="logo">
+            <h2>Consensus AI</h2>
           </div>
-        )}
-
-        {(isProcessing || finalOutput) && (
-          <div className="output-container">
-            {/* Status Indicator */}
-            {isProcessing && (
-              <div className="status-badge">
-                <div className="pulsing-dot"></div>
-                {statusMessage}
-              </div>
-            )}
-
-            {/* Markdown Rendered Output */}
-            {finalOutput && (
-              <div className="markdown-body">
-                <ReactMarkdown
-                  components={{
-                    code({node, inline, className, children, ...props}) {
-                      const match = /language-(\w+)/.exec(className || '')
-                      return !inline && match ? (
-                        <SyntaxHighlighter
-                          children={String(children).replace(/\n$/, '')}
-                          style={vscDarkPlus}
-                          language={match[1]}
-                          PreTag="div"
-                          className="code-block"
-                          {...props}
-                        />
-                      ) : (
-                        <code className="inline-code" {...props}>
-                          {children}
-                        </code>
-                      )
-                    }
-                  }}
-                >
-                  {finalOutput}
-                </ReactMarkdown>
-              </div>
-            )}
-            <div ref={outputEndRef} />
-          </div>
-        )}
-      </main>
-
-      {/* Input Area (Pinned to bottom like a chat UI) */}
-      <div className="input-wrapper">
-        <form onSubmit={handleSubmit} className="input-form">
-          <textarea
-            value={issue}
-            onChange={(e) => setIssue(e.target.value)}
-            placeholder="Ask anything about code, cloud, or tech..."
-            rows={1}
-            disabled={isProcessing}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSubmit(e);
-              }
-            }}
-          />
           <button 
-            type="submit" 
-            disabled={isProcessing || !issue.trim()}
-            className="submit-btn"
+            className="theme-toggle" 
+            onClick={() => setIsDarkMode(!isDarkMode)}
           >
-            <Send size={20} />
+            {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
           </button>
-        </form>
-        <p className="disclaimer">Consensus AI checks outputs across Gemma, Llama, Mistral, Qwen, and Phi-3.</p>
+        </header>
+
+        {/* Added the ref and onScroll listener here */}
+        <main className="main-content" ref={mainContentRef} onScroll={handleScroll}>
+          {!isProcessing && !finalOutput && (
+            <div className="gemini-empty-state">
+              <h1 className="greeting-text">
+                <Sparkles className="sparkle-icon" size={32} /> Hi Md
+              </h1>
+              <h2 className="sub-greeting">Where should we start?</h2>
+              
+              <div className="suggestion-chips">
+                <button onClick={() => handleChipClick("Create an AWS VPC architecture diagram")} className="chip">
+                  <span>🍌</span> Create image
+                </button>
+                <button onClick={() => handleChipClick("Explain how Docker containers work")} className="chip">
+                  <span>🏏</span> Explore cricket
+                </button>
+                <button onClick={() => handleChipClick("Write a python script for data analysis")} className="chip">
+                  <span>🎸</span> Create music
+                </button>
+                <button onClick={() => handleChipClick("Review my cloud security policies")} className="chip">
+                  Write anything
+                </button>
+                <button onClick={() => handleChipClick("Help me debug a React application")} className="chip">
+                  Boost my day
+                </button>
+                <button onClick={() => handleChipClick("Teach me about Kubernetes")} className="chip">
+                  Help me learn
+                </button>
+              </div>
+            </div>
+          )}
+
+          {(isProcessing || finalOutput) && (
+            <div className="output-container">
+              {/* Copy Button & Status Badge Header */}
+              <div className="output-header">
+                {isProcessing ? (
+                  <div className="status-badge">
+                    <Sparkles size={16} className="spin-icon" />
+                    {statusMessage}
+                  </div>
+                ) : (
+                  <div className="status-badge" style={{ color: 'var(--text-tertiary)' }}>
+                    <Check size={16} /> Analysis Complete
+                  </div>
+                )}
+                
+                {/* The new Copy Button */}
+                {finalOutput && (
+                  <button onClick={handleCopy} className="copy-btn">
+                    {isCopied ? <Check size={16} /> : <Copy size={16} />}
+                    <span>{isCopied ? 'Copied' : 'Copy'}</span>
+                  </button>
+                )}
+              </div>
+
+              {finalOutput && (
+                <div className="markdown-body">
+                  <ReactMarkdown
+                    components={{
+                      code({node, inline, className, children, ...props}) {
+                        const match = /language-(\w+)/.exec(className || '')
+                        return !inline && match ? (
+                          <SyntaxHighlighter
+                            children={String(children).replace(/\n$/, '')}
+                            style={vscDarkPlus}
+                            language={match[1]}
+                            PreTag="div"
+                            className="code-block"
+                            {...props}
+                          />
+                        ) : (
+                          <code className="inline-code" {...props}>
+                            {children}
+                          </code>
+                        )
+                      }
+                    }}
+                  >
+                    {finalOutput}
+                  </ReactMarkdown>
+                </div>
+              )}
+            </div>
+          )}
+        </main>
+
+        {/* Input Box */}
+        <div className="input-area">
+          <form onSubmit={handleSubmit} className="gemini-input-form">
+            <div className="input-icons-left">
+               <Plus size={20} />
+               <SlidersHorizontal size={20} className="tools-icon" /> <span className="tools-text">Tools</span>
+            </div>
+            <textarea
+              value={issue}
+              onChange={(e) => setIssue(e.target.value)}
+              placeholder="Enter a prompt for Consensus AI"
+              rows={1}
+              disabled={isProcessing}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e);
+                }
+              }}
+            />
+            <div className="input-icons-right">
+              {issue.trim() ? (
+                <button type="submit" disabled={isProcessing} className="send-btn">
+                  <Send size={20} />
+                </button>
+              ) : (
+                <Mic size={20} />
+              )}
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   );
