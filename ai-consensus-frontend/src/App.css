@@ -1,4 +1,3 @@
-
 /* Color Variables - Matching Gemini Light/Dark */
 :root {
   --bg-color: #ffffff;
@@ -34,15 +33,16 @@ body {
   font-family: 'Google Sans', -apple-system, BlinkMacSystemFont, sans-serif;
   background-color: var(--bg-color);
   color: var(--text-primary);
-  height: 100vh;
+  height: 100dvh; /* Changed to dvh for mobile browser bottoms */
   overflow: hidden;
 }
 
 /* Base Layout Grid */
 .layout {
   display: flex;
-  height: 100vh;
+  height: 100dvh;
   width: 100vw;
+  position: relative;
 }
 
 /* Left Sidebar */
@@ -54,6 +54,8 @@ body {
   align-items: center;
   padding-top: 16px;
   gap: 24px;
+  z-index: 1000;
+  transition: left 0.3s ease;
 }
 
 .icon-btn {
@@ -76,6 +78,7 @@ body {
   display: flex;
   flex-direction: column;
   position: relative;
+  min-width: 0;
 }
 
 /* Header */
@@ -84,6 +87,12 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 16px 24px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .logo h2 {
@@ -98,6 +107,11 @@ body {
   color: var(--text-secondary);
   cursor: pointer;
 }
+
+/* Desktop and Mobile Menu Icon Visibility */
+.mobile-menu-btn { display: none; }
+.close-sidebar-btn { display: none; }
+.sidebar-overlay { display: none; }
 
 /* Main Content (Scrolling Area) */
 .main-content {
@@ -237,32 +251,6 @@ body {
   max-width: 800px;
 }
 
-.status-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text-secondary);
-  font-size: 0.9rem;
-  margin-bottom: 24px;
-}
-
-.spin-icon { animation: spin 2s linear infinite; }
-@keyframes spin { 100% { transform: rotate(360deg); } }
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-
-/* Markdown & Code Blocks */
-.markdown-body {
-  line-height: 1.7;
-  font-size: 1.05rem;
-  color: var(--text-primary);
-}
-/* Chat Output Styling */
-.output-container {
-  margin: 40px auto 0 auto;
-  width: 100%;
-  max-width: 800px;
-}
-
 /* NEW: Layout for the top of the output box */
 .output-header {
   display: flex;
@@ -270,6 +258,8 @@ body {
   align-items: center;
   margin-bottom: 24px;
   min-height: 32px;
+  flex-wrap: wrap; /* Allows wrap on small screens */
+  gap: 12px;
 }
 
 .status-badge {
@@ -278,7 +268,7 @@ body {
   gap: 8px;
   color: var(--text-secondary);
   font-size: 0.9rem;
-  margin-bottom: 0; /* Removed margin-bottom so it aligns with the copy button */
+  margin-bottom: 0; 
 }
 
 /* NEW: Copy Button Styling */
@@ -300,8 +290,109 @@ body {
   background-color: var(--border-color);
   color: var(--text-primary);
 }
-.markdown-body p { margin-bottom: 1.2em; }
+
+.spin-icon { animation: spin 2s linear infinite; }
+@keyframes spin { 100% { transform: rotate(360deg); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Markdown & Code Blocks */
+.markdown-body {
+  line-height: 1.7;
+  font-size: 1.05rem;
+  color: var(--text-primary);
+}
+.markdown-body p { margin-bottom: 1.2em; word-wrap: break-word; }
 .markdown-body h1, .markdown-body h2, .markdown-body h3 { margin-bottom: 0.8em; font-weight: 500; }
 .markdown-body ul, .markdown-body ol { margin-bottom: 1.2em; padding-left: 2em; }
-.inline-code { background-color: var(--surface-color); padding: 0.2em 0.4em; border-radius: 4px; font-family: monospace; font-size: 0.9em; }
+.inline-code { background-color: var(--surface-color); padding: 0.2em 0.4em; border-radius: 4px; font-family: monospace; font-size: 0.9em; word-break: break-all; }
 .code-block { border-radius: 12px !important; margin: 1.5em 0 !important; font-size: 0.95em; }
+
+/* =========================================================
+   RESPONSIVE DESIGN (TABLETS & PHONES)
+   ========================================================= */
+
+@media (max-width: 768px) {
+  /* Header and Sidebar Toggle */
+  .desktop-menu-btn { display: none; }
+  .mobile-menu-btn { display: flex; margin-left: -12px; }
+  .close-sidebar-btn { display: flex; }
+
+  /* Turn Sidebar into a sliding mobile drawer */
+  .sidebar {
+    position: fixed;
+    left: -100%;
+    top: 0;
+    height: 100dvh;
+    box-shadow: 2px 0 12px rgba(0,0,0,0.1);
+  }
+
+  .sidebar.open {
+    left: 0;
+  }
+
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    top: 0; left: 0; 
+    width: 100vw; height: 100dvh;
+    background: rgba(0,0,0,0.5);
+    z-index: 999;
+    animation: fadeIn 0.3s ease;
+  }
+
+  /* Shrink enormous fonts for mobile */
+  .greeting-text, .sub-greeting {
+    font-size: 2.25rem;
+  }
+
+  .greeting-text .sparkle-icon {
+    width: 24px; height: 24px;
+  }
+
+  .sub-greeting { margin-bottom: 32px; }
+
+  /* Reduce chip sizes */
+  .suggestion-chips {
+    gap: 8px;
+  }
+  .chip {
+    padding: 8px 14px;
+    font-size: 0.85rem;
+  }
+
+  /* Main padding adjustments */
+  .header { padding: 12px 16px; }
+  .main-content { padding: 0 16px 120px 16px; }
+
+  /* Input area adjustments */
+  .input-area {
+    padding: 0 12px;
+    bottom: 12px;
+  }
+  
+  .gemini-input-form {
+    padding: 8px 12px;
+  }
+
+  .input-icons-left, .input-icons-right { gap: 10px; }
+  .tools-text { display: none; /* Hide 'Tools' text to save space */ }
+  .tools-icon { margin-left: 0; }
+
+  .markdown-body { font-size: 1rem; }
+}
+
+@media (max-width: 480px) {
+  /* Extra tiny screens (older iPhones, etc) */
+  .greeting-text, .sub-greeting {
+    font-size: 1.75rem;
+  }
+
+  .gemini-input-form textarea {
+    padding: 8px 12px;
+    font-size: 0.95rem;
+  }
+
+  .code-block {
+    font-size: 0.85em; /* Prevent code blocks from breaking layout */
+  }
+}

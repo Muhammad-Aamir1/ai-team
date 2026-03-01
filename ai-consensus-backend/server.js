@@ -1,3 +1,4 @@
+const path = require('path');
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -5,9 +6,13 @@ const cors = require('cors');
 const app = express();
 
 // Custom CORS setup for Google Cloud Shell
+// app.use(cors({
+//   origin: 'https://5173-cs-159059507892-default.cs-us-west1-vwey.cloudshell.dev',
+//   credentials: true
+// }));
+
 app.use(cors({
-  origin: 'https://5173-cs-159059507892-default.cs-us-west1-vwey.cloudshell.dev',
-  credentials: true
+  origin: '*' 
 }));
 app.use(express.json());
 
@@ -63,18 +68,48 @@ async function callOpenRouter(modelList, systemPrompt, userPrompt, stream = fals
 // Reusable System Prompt for the Reviewers (Steps 2-5)
 const REVIEWER_SYSTEM_PROMPT = `You are an expert technical problem solver. Your task is to review the provided user issue and the proposed solution from a previous AI. You must carefully review the response, find any mistakes, find the correct answer for the solution, and explicitly identify the root cause of the issue.`;
 
+// app.post('/api/solve-issue', async (req, res) => {
+//     const { issue } = req.body;
+
+//     if (!issue) return res.status(400).json({ error: 'Issue description is required.' });
+
+//     res.setHeader('Content-Type', 'text/event-stream');
+//     res.setHeader('Cache-Control', 'no-cache');
+//     res.setHeader('Connection', 'keep-alive');
+//     res.setHeader('X-Accel-Buffering', 'no'); // <-- ADD THIS LINE
+
+//     const sendEvent = (type, data) => res.write(JSON.stringify({ type, data }) + '\n');
+
+//     try {
 app.post('/api/solve-issue', async (req, res) => {
     const { issue } = req.body;
 
     if (!issue) return res.status(400).json({ error: 'Issue description is required.' });
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    // --- 1. BULLETPROOF STREAMING HEADERS FOR GOOGLE CLOUD ---
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform'); // no-transform prevents App Engine gzip buffering
     res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    
+    // --- 2. FORCE HEADERS TO SEND IMMEDIATELY ---
+    res.flushHeaders();
 
-    const sendEvent = (type, data) => res.write(JSON.stringify({ type, data }) + '\n');
+    // --- 3. SMART EVENT SENDER WITH PADDING ---
+    const sendEvent = (type, data) => {
+        let payload = JSON.stringify({ type, data });
+        
+        // Trick Google's Proxy: Status updates are too small to trigger a network flush on their own.
+        // We add 4KB of invisible space padding ONLY to 'status' events to force the proxy to push them to the UI instantly!
+        if (type === 'status') {
+            payload += ' '.repeat(4096);
+        }
+        
+        res.write(payload + '\n');
+    };
 
     try {
+        // --- STEP 1: GEMINI (Initial Answer) ---
         // --- STEP 1: GEMINI (Initial Answer) ---
         sendEvent('status', 'Gemini is analyzing the initial issue...');
         const res1 = await callOpenRouter(
@@ -175,5 +210,23 @@ Your STRICT objectives:
     }
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+// --- NEW: Serve React Frontend ---
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// Smart catch-all route to serve the React app
+app.use((req, res, next) => {
+    // If it's a page navigation (no dot in the path), serve index.html and DO NOT cache it
+    if (req.method === 'GET' && !req.path.startsWith('/api') && !req.path.includes('.')) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    } else {
+        // If it's a missing .js or .css file, cleanly return a 404 instead of an HTML file
+        res.status(404).send('File not found');
+    }
+});
+
+// Explicitly bind to 0.0.0.0 so Cloud Run can reach it
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Backend successfully running on port ${PORT}`);
+});
