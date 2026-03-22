@@ -1,138 +1,233 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { Moon, Sun, Send, Menu, SquarePen, Sparkles, Plus, SlidersHorizontal, Mic, Copy, Check, X } from 'lucide-react';
+import {
+  Moon, Sun, Send, Sparkles, Plus,
+  SlidersHorizontal, Mic, Copy, Check, X, Menu, SquarePen
+} from 'lucide-react';
 import './App.css';
 
-function App() {
-  const [issue, setIssue] = useState('');
-  const [statusMessage, setStatusMessage] = useState('');
-  const [finalOutput, setFinalOutput] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const [isCopied, setIsCopied] = useState(false);
-  const [autoScroll, setAutoScroll] = useState(true); // Smart scroll state
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // NEW: Mobile Sidebar State
-  
-  const mainContentRef = useRef(null);
+// ─────────────────────────────────────────────────────────────
+// Custom hook: encapsulates all SSE streaming logic
+// ─────────────────────────────────────────────────────────────
+function useConsensusStream() {
+  const [status, setStatus]     = useState('');
+  const [output, setOutput]     = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  // Smart Auto-Scroll logic
-  useEffect(() => {
-    if (autoScroll && mainContentRef.current) {
-      // Smoothly scroll the container to the bottom without hijacking the whole page
-      mainContentRef.current.scrollTop = mainContentRef.current.scrollHeight;
-    }
-  }, [finalOutput, statusMessage, autoScroll]);
-
-  // Detect if the user manually scrolls up
-  const handleScroll = () => {
-    if (!mainContentRef.current) return;
-    const { scrollTop, scrollHeight, clientHeight } = mainContentRef.current;
-    // If user is within 100px of the bottom, keep auto-scrolling. Otherwise, pause it.
-    const isAtBottom = scrollHeight - scrollTop <= clientHeight + 100;
-    setAutoScroll(isAtBottom);
-  };
-
-  useEffect(() => {
-    document.body.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
-  }, [isDarkMode]);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(finalOutput);
-    setIsCopied(true);
-    setTimeout(() => setIsCopied(false), 2000); // Reset button after 2 seconds
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!issue.trim()) return;
-
-    setIsProcessing(true);
-    setStatusMessage('Initiating AI Consensus Chain...');
-    setFinalOutput('');
-    setAutoScroll(true); // Reset auto-scroll when a new prompt starts
+  const submit = useCallback(async (issue) => {
+    setIsLoading(true);
+    setOutput('');
+    setStatus('Initiating AI Consensus Chain...');
 
     try {
-       const response = await fetch('/api/solve-issue', {
-    //  const response = await fetch('https://ai-consensus-backend-1060991196966.me-west1.run.app/api/solve-issue', {
+      const response = await fetch('/api/solve-issue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ issue })
+        body: JSON.stringify({ issue }),
       });
 
-      const reader = response.body.getReader();
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        setOutput(`**Error:** ${err.error || 'Server error. Please try again.'}`);
+        setIsLoading(false);
+        return;
+      }
+
+      const reader  = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
-      
-      let buffer = ''; // NEW: Add a buffer to catch chopped network packets
+      let buffer    = '';
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        buffer += chunk; // Add the new chunk to our buffer
-        
-        // Split by newline
-        const events = buffer.split('\n');
-        // Pop the last element (which might be an incomplete JSON string) and keep it in the buffer for next time
-        buffer = events.pop(); 
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep incomplete trailing chunk
 
-        for (const event of events) {
-          if (!event.trim()) continue; // Skip empty lines
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          // Strip the 4 KB status-event padding before parsing
+          const trimmed = line.trimEnd();
           try {
-            const parsed = JSON.parse(event);
-            if (parsed.type === 'status') {
-              setStatusMessage(parsed.data);
-            } else if (parsed.type === 'token') {
-              setFinalOutput((prev) => prev + parsed.data);
-              setStatusMessage('Gemini is finalizing the response...');
-            } else if (parsed.type === 'error') {
-              setFinalOutput(`**Error:** ${parsed.data}`);
-              setIsProcessing(false);
-            } else if (parsed.type === 'done') {
-              setStatusMessage('Done!');
-              setIsProcessing(false);
+            const { type, data } = JSON.parse(trimmed);
+            if (type === 'status') {
+              setStatus(data);
+            } else if (type === 'token') {
+              setOutput((prev) => prev + data);
+              setStatus('Gemini is finalizing the response...');
+            } else if (type === 'error') {
+              setOutput(`**Error:** ${data}`);
+              setIsLoading(false);
+            } else if (type === 'done') {
+              setStatus('Done!');
+              setIsLoading(false);
             }
-          } catch (err) { 
-            // Ignore corrupted chunks
+          } catch {
+            // Silently ignore corrupted / partial chunks
           }
         }
       }
-    } catch (error) {
-      setFinalOutput("**Network error.** Could not connect to the backend.");
-      setIsProcessing(false);
+    } catch {
+      setOutput('**Network error.** Could not connect to the backend.');
+      setIsLoading(false);
     }
+  }, []);
+
+  return { status, output, isLoading, submit };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Suggestion chips — label & prompt are now in sync
+// ─────────────────────────────────────────────────────────────
+const SUGGESTION_CHIPS = [
+  { emoji: '☁️',  label: 'Cloud architecture',  prompt: 'Create an AWS VPC architecture diagram'         },
+  { emoji: '🐳',  label: 'Explain Docker',       prompt: 'Explain how Docker containers work'             },
+  { emoji: '🐍',  label: 'Python script',        prompt: 'Write a Python script for data analysis'        },
+  { emoji: '🔐',  label: 'Cloud security',       prompt: 'Review my cloud security policies'              },
+  { emoji: '⚛️',  label: 'Debug React',          prompt: 'Help me debug a React application'              },
+  { emoji: '☸️',  label: 'Learn Kubernetes',     prompt: 'Teach me about Kubernetes'                      },
+];
+
+// ─────────────────────────────────────────────────────────────
+// Main App component
+// ─────────────────────────────────────────────────────────────
+function App() {
+  const { status, output, isLoading, submit } = useConsensusStream();
+
+  const [issue,         setIssue]         = useState('');
+  const [isDarkMode,    setIsDarkMode]    = useState(false);
+  const [isCopied,      setIsCopied]      = useState(false);
+  const [autoScroll,    setAutoScroll]    = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isListening,   setIsListening]   = useState(false);
+
+  const mainContentRef = useRef(null);
+  const recognitionRef = useRef(null);
+
+  // ── Dark-mode ──
+  useEffect(() => {
+    document.body.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
+
+  // ── Smart auto-scroll ──
+  useEffect(() => {
+    if (autoScroll && mainContentRef.current) {
+      mainContentRef.current.scrollTop = mainContentRef.current.scrollHeight;
+    }
+  }, [output, status, autoScroll]);
+
+  const handleScroll = () => {
+    if (!mainContentRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = mainContentRef.current;
+    setAutoScroll(scrollHeight - scrollTop <= clientHeight + 100);
   };
 
-  const handleChipClick = (text) => {
-    setIssue(text);
+  // ── Copy button ──
+  const handleCopy = () => {
+    navigator.clipboard.writeText(output);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  // ── Form submit ──
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!issue.trim() || isLoading) return;
+    setAutoScroll(true);
+    submit(issue.trim());
+  };
+
+  // ── Voice input (Web Speech API — fully free, runs in browser) ──
+  const handleMic = () => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      alert('Voice input is not supported in your browser. Try Chrome or Edge.');
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang          = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setIssue((prev) => (prev ? `${prev} ${transcript}` : transcript));
+    };
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => setIsListening(false);
+
+    recognitionRef.current = recognition;
+    recognition.start();
+    setIsListening(true);
+  };
+
+  // ── New chat ──
+  const handleNewChat = () => {
+    if (isLoading) return;
+    setIssue('');
+    setIsSidebarOpen(false);
+    // Force a page reload to reset hook state cleanly
+    window.location.reload();
   };
 
   return (
     <div className="layout">
-      {/* NEW: Overlay background for mobile sidebar */}
+
+      {/* Mobile sidebar overlay */}
       {isSidebarOpen && (
-        <div className="sidebar-overlay" onClick={() => setIsSidebarOpen(false)}></div>
+        <div
+          className="sidebar-overlay"
+          onClick={() => setIsSidebarOpen(false)}
+        />
       )}
 
-      {/* Sidebar with dynamic mobile class */}
+      {/* Sidebar */}
       <aside className={`sidebar ${isSidebarOpen ? 'open' : ''}`}>
-        <button className="icon-btn close-sidebar-btn" onClick={() => setIsSidebarOpen(false)}>
+        <button
+          className="icon-btn close-sidebar-btn"
+          onClick={() => setIsSidebarOpen(false)}
+          aria-label="Close sidebar"
+        >
           <X size={20} />
         </button>
-        <button className="icon-btn desktop-menu-btn"><Menu size={20} /></button>
-        <button className="icon-btn new-chat-btn"><SquarePen size={20} /></button>
+        <button
+          className="icon-btn desktop-menu-btn"
+          aria-label="Toggle sidebar"
+        >
+          <Menu size={20} />
+        </button>
+        <button
+          className="icon-btn new-chat-btn"
+          onClick={handleNewChat}
+          aria-label="New chat"
+          title="New chat"
+        >
+          <SquarePen size={20} />
+        </button>
       </aside>
 
-      {/* Main Content Area */}
+      {/* Main content */}
       <div className="main-wrapper">
+
+        {/* Header */}
         <header className="header">
           <div className="header-left">
-            {/* NEW: Mobile Menu Button */}
-            <button 
-              className="icon-btn mobile-menu-btn" 
+            <button
+              className="icon-btn mobile-menu-btn"
               onClick={() => setIsSidebarOpen(true)}
+              aria-label="Open sidebar"
             >
               <Menu size={20} />
             </button>
@@ -140,64 +235,61 @@ function App() {
               <h2>Consensus AI</h2>
             </div>
           </div>
-
-          <button 
-            className="theme-toggle" 
+          <button
+            className="theme-toggle"
             onClick={() => setIsDarkMode(!isDarkMode)}
+            aria-label="Toggle theme"
           >
             {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
           </button>
         </header>
 
-        {/* Added the ref and onScroll listener here */}
-        <main className="main-content" ref={mainContentRef} onScroll={handleScroll}>
-          {!isProcessing && !finalOutput && (
+        {/* Scrollable content area */}
+        <main
+          className="main-content"
+          ref={mainContentRef}
+          onScroll={handleScroll}
+        >
+          {/* Empty / welcome state */}
+          {!isLoading && !output && (
             <div className="gemini-empty-state">
               <h1 className="greeting-text">
-                <Sparkles className="sparkle-icon" size={32} /> Hi Md
+                <Sparkles className="sparkle-icon" size={32} />
+                Hi Amir
               </h1>
               <h2 className="sub-greeting">Where should we start?</h2>
-              
+
               <div className="suggestion-chips">
-                <button onClick={() => handleChipClick("Create an AWS VPC architecture diagram")} className="chip">
-                  <span>🍌</span> Create image
-                </button>
-                <button onClick={() => handleChipClick("Explain how Docker containers work")} className="chip">
-                  <span>🏏</span> Explore cricket
-                </button>
-                <button onClick={() => handleChipClick("Write a python script for data analysis")} className="chip">
-                  <span>🎸</span> Create music
-                </button>
-                <button onClick={() => handleChipClick("Review my cloud security policies")} className="chip">
-                  Write anything
-                </button>
-                <button onClick={() => handleChipClick("Help me debug a React application")} className="chip">
-                  Boost my day
-                </button>
-                <button onClick={() => handleChipClick("Teach me about Kubernetes")} className="chip">
-                  Help me learn
-                </button>
+                {SUGGESTION_CHIPS.map(({ emoji, label, prompt }) => (
+                  <button
+                    key={label}
+                    className="chip"
+                    onClick={() => setIssue(prompt)}
+                  >
+                    <span>{emoji}</span> {label}
+                  </button>
+                ))}
               </div>
             </div>
           )}
 
-          {(isProcessing || finalOutput) && (
+          {/* Output area */}
+          {(isLoading || output) && (
             <div className="output-container">
-              {/* Copy Button & Status Badge Header */}
+
               <div className="output-header">
-                {isProcessing ? (
+                {isLoading ? (
                   <div className="status-badge">
                     <Sparkles size={16} className="spin-icon" />
-                    {statusMessage}
+                    {status}
                   </div>
                 ) : (
                   <div className="status-badge" style={{ color: 'var(--text-tertiary)' }}>
                     <Check size={16} /> Analysis Complete
                   </div>
                 )}
-                
-                {/* The new Copy Button */}
-                {finalOutput && (
+
+                {output && (
                   <button onClick={handleCopy} className="copy-btn">
                     {isCopied ? <Check size={16} /> : <Copy size={16} />}
                     <span>{isCopied ? 'Copied' : 'Copy'}</span>
@@ -205,30 +297,31 @@ function App() {
                 )}
               </div>
 
-              {finalOutput && (
+              {output && (
                 <div className="markdown-body">
                   <ReactMarkdown
                     components={{
-                      code({node, inline, className, children, ...props}) {
-                        const match = /language-(\w+)/.exec(className || '')
+                      code({ node, inline, className, children, ...props }) {
+                        const match = /language-(\w+)/.exec(className || '');
                         return !inline && match ? (
                           <SyntaxHighlighter
-                            children={String(children).replace(/\n$/, '')}
                             style={vscDarkPlus}
                             language={match[1]}
                             PreTag="div"
                             className="code-block"
                             {...props}
-                          />
+                          >
+                            {String(children).replace(/\n$/, '')}
+                          </SyntaxHighlighter>
                         ) : (
                           <code className="inline-code" {...props}>
                             {children}
                           </code>
-                        )
-                      }
+                        );
+                      },
                     }}
                   >
-                    {finalOutput}
+                    {output}
                   </ReactMarkdown>
                 </div>
               )}
@@ -236,19 +329,22 @@ function App() {
           )}
         </main>
 
-        {/* Input Box */}
+        {/* Input bar */}
         <div className="input-area">
           <form onSubmit={handleSubmit} className="gemini-input-form">
+
             <div className="input-icons-left">
-               <Plus size={20} />
-               <SlidersHorizontal size={20} className="tools-icon" /> <span className="tools-text">Tools</span>
+              <Plus size={20} />
+              <SlidersHorizontal size={20} className="tools-icon" />
+              <span className="tools-text">Tools</span>
             </div>
+
             <textarea
               value={issue}
               onChange={(e) => setIssue(e.target.value)}
               placeholder="Enter a prompt for Consensus AI"
               rows={1}
-              disabled={isProcessing}
+              disabled={isLoading}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -256,309 +352,36 @@ function App() {
                 }
               }}
             />
+
             <div className="input-icons-right">
               {issue.trim() ? (
-                <button type="submit" disabled={isProcessing} className="send-btn">
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="send-btn"
+                  aria-label="Send"
+                >
                   <Send size={20} />
                 </button>
               ) : (
-                <Mic size={20} />
+                <button
+                  type="button"
+                  className={`mic-btn ${isListening ? 'listening' : ''}`}
+                  onClick={handleMic}
+                  aria-label={isListening ? 'Stop listening' : 'Start voice input'}
+                  title={isListening ? 'Tap to stop' : 'Voice input'}
+                >
+                  <Mic size={20} />
+                </button>
               )}
             </div>
+
           </form>
         </div>
+
       </div>
     </div>
   );
 }
 
 export default App;
-
-
-
-//  import React, { useState, useEffect, useRef } from 'react';
-// import ReactMarkdown from 'react-markdown';
-// import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-// import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
-// import { Moon, Sun, Send, Menu, SquarePen, Sparkles, Plus, SlidersHorizontal, Mic, Copy, Check } from 'lucide-react';
-// import './App.css';
-
-// function App() {
-//   const [issue, setIssue] = useState('');
-//   const [statusMessage, setStatusMessage] = useState('');
-//   const [finalOutput, setFinalOutput] = useState('');
-//   const [isProcessing, setIsProcessing] = useState(false);
-//   const [isDarkMode, setIsDarkMode] = useState(false);
-//   const [isCopied, setIsCopied] = useState(false);
-//   const [autoScroll, setAutoScroll] = useState(true); // Smart scroll state
-  
-//   const mainContentRef = useRef(null);
-
-//   // Smart Auto-Scroll logic
-//   useEffect(() => {
-//     if (autoScroll && mainContentRef.current) {
-//       // Smoothly scroll the container to the bottom without hijacking the whole page
-//       mainContentRef.current.scrollTop = mainContentRef.current.scrollHeight;
-//     }
-//   }, [finalOutput, statusMessage, autoScroll]);
-
-//   // Detect if the user manually scrolls up
-//   const handleScroll = () => {
-//     if (!mainContentRef.current) return;
-//     const { scrollTop, scrollHeight, clientHeight } = mainContentRef.current;
-//     // If user is within 100px of the bottom, keep auto-scrolling. Otherwise, pause it.
-//     const isAtBottom = scrollHeight - scrollTop <= clientHeight + 100;
-//     setAutoScroll(isAtBottom);
-//   };
-
-//   useEffect(() => {
-//     document.body.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
-//   }, [isDarkMode]);
-
-//   const handleCopy = () => {
-//     navigator.clipboard.writeText(finalOutput);
-//     setIsCopied(true);
-//     setTimeout(() => setIsCopied(false), 2000); // Reset button after 2 seconds
-//   };
-
-//   const handleSubmit = async (e) => {
-//     e.preventDefault();
-//     if (!issue.trim()) return;
-
-//     setIsProcessing(true);
-//     setStatusMessage('Initiating AI Consensus Chain...');
-//     setFinalOutput('');
-//     setAutoScroll(true); // Reset auto-scroll when a new prompt starts
-
-//     try {
-//        const response = await fetch('/api/solve-issue', {
-//     //  const response = await fetch('https://ai-consensus-backend-1060991196966.me-west1.run.app/api/solve-issue', {
-//         method: 'POST',
-//         headers: { 'Content-Type': 'application/json' },
-//         body: JSON.stringify({ issue })
-//       });
-
-//       // const reader = response.body.getReader();
-//       // const decoder = new TextDecoder('utf-8');
-
-//       // while (true) {
-//       //   const { value, done } = await reader.read();
-//       //   if (done) break;
-
-//       //   const chunk = decoder.decode(value, { stream: true });
-//       //   const events = chunk.split('\n').filter(Boolean);
-
-//       //   for (const event of events) {
-//       //     try {
-//       //       const parsed = JSON.parse(event);
-//       //       if (parsed.type === 'status') {
-//       //         setStatusMessage(parsed.data);
-//       //       } else if (parsed.type === 'token') {
-//       //         setFinalOutput((prev) => prev + parsed.data);
-//       //         // CHANGED HERE: Now clearly states Gemini is finalizing the response
-//       //         setStatusMessage('Gemini is finalizing the response...');
-//       //       } else if (parsed.type === 'error') {
-//       //         setFinalOutput(`**Error:** ${parsed.data}`);
-//       //         setIsProcessing(false);
-//       //       } else if (parsed.type === 'done') {
-//       //         setStatusMessage('Done!');
-//       //         setIsProcessing(false);
-//       //       }
-//       //     } catch (err) { }
-//       //   }
-//       // }
-
-//       const reader = response.body.getReader();
-//       const decoder = new TextDecoder('utf-8');
-      
-//       let buffer = ''; // NEW: Add a buffer to catch chopped network packets
-
-//       while (true) {
-//         const { value, done } = await reader.read();
-//         if (done) break;
-
-//         const chunk = decoder.decode(value, { stream: true });
-//         buffer += chunk; // Add the new chunk to our buffer
-        
-//         // Split by newline
-//         const events = buffer.split('\n');
-//         // Pop the last element (which might be an incomplete JSON string) and keep it in the buffer for next time
-//         buffer = events.pop(); 
-
-//         for (const event of events) {
-//           if (!event.trim()) continue; // Skip empty lines
-//           try {
-//             const parsed = JSON.parse(event);
-//             if (parsed.type === 'status') {
-//               setStatusMessage(parsed.data);
-//             } else if (parsed.type === 'token') {
-//               setFinalOutput((prev) => prev + parsed.data);
-//               setStatusMessage('Gemini is finalizing the response...');
-//             } else if (parsed.type === 'error') {
-//               setFinalOutput(`**Error:** ${parsed.data}`);
-//               setIsProcessing(false);
-//             } else if (parsed.type === 'done') {
-//               setStatusMessage('Done!');
-//               setIsProcessing(false);
-//             }
-//           } catch (err) { 
-//             // Ignore corrupted chunks
-//           }
-//         }
-//       }
-//     } catch (error) {
-//       setFinalOutput("**Network error.** Could not connect to the backend.");
-//       setIsProcessing(false);
-//     }
-//   };
-
-//   const handleChipClick = (text) => {
-//     setIssue(text);
-//   };
-
-//   return (
-//     <div className="layout">
-//       {/* Sidebar */}
-//       <aside className="sidebar">
-//         <button className="icon-btn"><Menu size={20} /></button>
-//         <button className="icon-btn new-chat-btn"><SquarePen size={20} /></button>
-//       </aside>
-
-//       {/* Main Content Area */}
-//       <div className="main-wrapper">
-//         <header className="header">
-//           <div className="logo">
-//             <h2>Consensus AI</h2>
-//           </div>
-//           <button 
-//             className="theme-toggle" 
-//             onClick={() => setIsDarkMode(!isDarkMode)}
-//           >
-//             {isDarkMode ? <Sun size={20} /> : <Moon size={20} />}
-//           </button>
-//         </header>
-
-//         {/* Added the ref and onScroll listener here */}
-//         <main className="main-content" ref={mainContentRef} onScroll={handleScroll}>
-//           {!isProcessing && !finalOutput && (
-//             <div className="gemini-empty-state">
-//               <h1 className="greeting-text">
-//                 <Sparkles className="sparkle-icon" size={32} /> Hi Md
-//               </h1>
-//               <h2 className="sub-greeting">Where should we start?</h2>
-              
-//               <div className="suggestion-chips">
-//                 <button onClick={() => handleChipClick("Create an AWS VPC architecture diagram")} className="chip">
-//                   <span>🍌</span> Create image
-//                 </button>
-//                 <button onClick={() => handleChipClick("Explain how Docker containers work")} className="chip">
-//                   <span>🏏</span> Explore cricket
-//                 </button>
-//                 <button onClick={() => handleChipClick("Write a python script for data analysis")} className="chip">
-//                   <span>🎸</span> Create music
-//                 </button>
-//                 <button onClick={() => handleChipClick("Review my cloud security policies")} className="chip">
-//                   Write anything
-//                 </button>
-//                 <button onClick={() => handleChipClick("Help me debug a React application")} className="chip">
-//                   Boost my day
-//                 </button>
-//                 <button onClick={() => handleChipClick("Teach me about Kubernetes")} className="chip">
-//                   Help me learn
-//                 </button>
-//               </div>
-//             </div>
-//           )}
-
-//           {(isProcessing || finalOutput) && (
-//             <div className="output-container">
-//               {/* Copy Button & Status Badge Header */}
-//               <div className="output-header">
-//                 {isProcessing ? (
-//                   <div className="status-badge">
-//                     <Sparkles size={16} className="spin-icon" />
-//                     {statusMessage}
-//                   </div>
-//                 ) : (
-//                   <div className="status-badge" style={{ color: 'var(--text-tertiary)' }}>
-//                     <Check size={16} /> Analysis Complete
-//                   </div>
-//                 )}
-                
-//                 {/* The new Copy Button */}
-//                 {finalOutput && (
-//                   <button onClick={handleCopy} className="copy-btn">
-//                     {isCopied ? <Check size={16} /> : <Copy size={16} />}
-//                     <span>{isCopied ? 'Copied' : 'Copy'}</span>
-//                   </button>
-//                 )}
-//               </div>
-
-//               {finalOutput && (
-//                 <div className="markdown-body">
-//                   <ReactMarkdown
-//                     components={{
-//                       code({node, inline, className, children, ...props}) {
-//                         const match = /language-(\w+)/.exec(className || '')
-//                         return !inline && match ? (
-//                           <SyntaxHighlighter
-//                             children={String(children).replace(/\n$/, '')}
-//                             style={vscDarkPlus}
-//                             language={match[1]}
-//                             PreTag="div"
-//                             className="code-block"
-//                             {...props}
-//                           />
-//                         ) : (
-//                           <code className="inline-code" {...props}>
-//                             {children}
-//                           </code>
-//                         )
-//                       }
-//                     }}
-//                   >
-//                     {finalOutput}
-//                   </ReactMarkdown>
-//                 </div>
-//               )}
-//             </div>
-//           )}
-//         </main>
-
-//         {/* Input Box */}
-//         <div className="input-area">
-//           <form onSubmit={handleSubmit} className="gemini-input-form">
-//             <div className="input-icons-left">
-//                <Plus size={20} />
-//                <SlidersHorizontal size={20} className="tools-icon" /> <span className="tools-text">Tools</span>
-//             </div>
-//             <textarea
-//               value={issue}
-//               onChange={(e) => setIssue(e.target.value)}
-//               placeholder="Enter a prompt for Consensus AI"
-//               rows={1}
-//               disabled={isProcessing}
-//               onKeyDown={(e) => {
-//                 if (e.key === 'Enter' && !e.shiftKey) {
-//                   e.preventDefault();
-//                   handleSubmit(e);
-//                 }
-//               }}
-//             />
-//             <div className="input-icons-right">
-//               {issue.trim() ? (
-//                 <button type="submit" disabled={isProcessing} className="send-btn">
-//                   <Send size={20} />
-//                 </button>
-//               ) : (
-//                 <Mic size={20} />
-//               )}
-//             </div>
-//           </form>
-//         </div>
-//       </div>
-//     </div>
-//   );
-// }
-
-// export default App;
